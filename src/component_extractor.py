@@ -91,6 +91,7 @@ GENERIC_NAMES = {
 CONNECTOR_ID_PATTERN = re.compile(r"^(?:J|X|CN|XS|XP)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 WIRE_ID_PATTERN = re.compile(r"^(?:A|B|S|M)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 SHORT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,10}$")
+PART_NUMBER_FRAGMENT_PATTERN = re.compile(r"^[0-9]+(?:-[0-9]*)?$")
 OCR_REPLACEMENTS = (
     ("QBD诊断插座", "OBD诊断插座"),
     ("刺叭", "喇叭"),
@@ -255,6 +256,29 @@ def _should_merge_text(text: str) -> bool:
     return any(keyword in value for keyword in COMPONENT_SUFFIXES)
 
 
+def _is_short_label_text(text: str) -> bool:
+    value = normalize_text(text)
+    if PART_NUMBER_FRAGMENT_PATTERN.fullmatch(value):
+        return False
+    return bool(SHORT_LABEL_PATTERN.fullmatch(value))
+
+
+def _has_component_suffix(text: str) -> bool:
+    value = normalize_text(text)
+    return any(keyword in value for keyword in COMPONENT_SUFFIXES)
+
+
+def _should_merge_pair(left: OCRResult, right: OCRResult) -> bool:
+    left_is_label = _is_short_label_text(left.text)
+    right_is_label = _is_short_label_text(right.text)
+    left_has_component = _has_component_suffix(left.text)
+    right_has_component = _has_component_suffix(right.text)
+
+    if left_has_component and right_has_component:
+        return False
+    return (left_is_label and right_has_component) or (right_is_label and left_has_component)
+
+
 def _merged_ocr_results(ocr_results: list[OCRResult]) -> list[OCRResult]:
     by_page: dict[int, list[OCRResult]] = {}
     for result in ocr_results:
@@ -268,6 +292,8 @@ def _merged_ocr_results(ocr_results: list[OCRResult]) -> list[OCRResult]:
         for index, left in enumerate(ordered):
             for right in ordered[index + 1 : index + 8]:
                 if not _nearby(left, right):
+                    continue
+                if not _should_merge_pair(left, right):
                     continue
                 combined = normalize_text(f"{left.text} {right.text}")
                 if len(combined) > MAX_MERGED_TEXT_LENGTH or _is_bad_context(combined):
