@@ -29,6 +29,15 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --dpi 300
 python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 ```
 
+启用 AI 视觉审核候选名称：
+
+```powershell
+$env:OPENAI_API_KEY="你的 API Key"
+python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
+```
+
+如果没有设置 `OPENAI_API_KEY`，程序不会调用外部 API，只会生成裁剪图和离线审核清单，方便人工查看。
+
 ## 输出
 
 默认输出到 `output/`，按用途分目录：
@@ -41,6 +50,10 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - `output/review/components_review.xlsx`：按证据打分后的审核表，包含分数、层级、来源、页码和判断理由
 - `output/review/draft_gold_names.xlsx`：Excel 版高可信名称和召回补漏名称
 - `output/review/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
+- `output/review/ai_vision_review.xlsx`：AI 视觉审核结果，启用 `--ai-vision-review` 且设置 API key 后生成
+- `output/final/ai_verified_names.txt`：AI 视觉确认后的名称，启用 `--ai-vision-review` 且设置 API key 后生成
+- `output/ai_vision/vision_manifest.csv`：送审名称、裁剪图、页码和 OCR 原文清单
+- `output/ai_vision/crops/`：候选名称附近的原图裁剪，用于 AI 视觉审核或人工复核
 - `output/raw/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
 - `output/raw/ocr_raw.csv`：OCR 原始识别文本
 - `output/raw/pdf_text.csv`：PDF 原生文本
@@ -59,6 +72,7 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - 输出分为高可信结果和疑似候选结果：`components.txt` 保持干净，`components_candidates.txt` 保留可能需要人工补漏的编号和短名称。
 - 对相邻 OCR 的短编号和元器件名称做近邻合并，合并结果只进入疑似候选层，用来补回被 OCR 拆开的名称和标识。
 - 额外提取 PDF 原生文本证据，并对候选进行打分，生成 `components_review.xlsx` 和 `draft_gold_names.txt`，用于快速形成 AI 初版标准答案。
+- 可选启用 AI 视觉审核：程序会为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断接受、修正或拒绝候选，输出 `ai_verified_names.txt`。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 

@@ -141,6 +141,11 @@ PURE_CONNECTOR_ID_PATTERN = re.compile(r"^(?:CN|X|J|F|G|K)[-_]?\d{1,4}[A-Z]?$", 
 SHORT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,10}$")
 PART_NUMBER_FRAGMENT_PATTERN = re.compile(r"^[0-9]+(?:-[0-9]*)?$")
 OCR_REPLACEMENTS = (
+    ("仪仪表板", "仪表板"),
+    ("右底底盘", "右底盘"),
+    ("底底盘", "底盘"),
+    ("驾驶驾驶室", "驾驶室"),
+    ("液液压", "液压"),
     ("QBD诊断插座", "OBD诊断插座"),
     ("刺叭", "喇叭"),
     ("剌叭", "喇叭"),
@@ -174,9 +179,18 @@ def normalize_text(text: str) -> str:
 
 def normalize_name(name: str) -> str:
     name = normalize_text(name)
+    name = _repair_fragment_prefix(name)
     name = PUNCTUATION_PATTERN.sub("", name)
     name = _trim_leading_ocr_noise(name)
     return name.upper() if re.fullmatch(r"[A-Za-z0-9_\-]+", name) else name
+
+
+def _repair_fragment_prefix(name: str) -> str:
+    if name.startswith("板电线束"):
+        return "仪表板电线束" + name[len("板电线束") :]
+    if name.startswith("盘电线束"):
+        return "底盘电线束" + name[len("盘电线束") :]
+    return name
 
 
 def _trim_leading_ocr_noise(name: str) -> str:

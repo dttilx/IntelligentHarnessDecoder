@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .component_extractor import extract_components
+from .ai_vision_reviewer import VisionReviewConfig, run_ai_vision_review
 from .config import AppConfig, OCRConfig, RenderConfig, TileConfig
 from .image_preprocess import create_tiles
 from .ocr_engine import OCREngine, save_raw_ocr_csv
@@ -44,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-pdf-text", action="store_true", help="不提取 PDF 原生文本证据。")
     parser.add_argument("--no-review-output", action="store_true", help="不生成 AI 辅助审核草稿输出。")
     parser.add_argument("--score-threshold", type=float, default=0.75, help="草稿标准答案最低分数。")
+    parser.add_argument("--ai-vision-review", action="store_true", help="启用 AI 视觉审核候选名称。")
+    parser.add_argument("--ai-vision-model", default="gpt-4.1-mini", help="AI 视觉审核模型。")
+    parser.add_argument("--ai-vision-max-names", type=int, default=120, help="最多送审的名称数量。")
+    parser.add_argument("--ai-vision-margin", type=int, default=180, help="候选文字裁剪外扩像素。")
     return parser
 
 
@@ -109,6 +114,25 @@ def run(args: argparse.Namespace) -> int:
     if not args.no_review_output:
         print("6/6 生成 AI 辅助审核草稿...")
         write_review_outputs(candidates, pdf_text_items, output_dir, threshold=args.score_threshold)
+    if args.ai_vision_review:
+        print("AI 视觉审核候选名称...")
+        decisions = run_ai_vision_review(
+            candidates,
+            pdf_text_items,
+            page_images,
+            output_dir,
+            VisionReviewConfig(
+                enabled=True,
+                model=args.ai_vision_model,
+                max_names=args.ai_vision_max_names,
+                margin=args.ai_vision_margin,
+            ),
+        )
+        if decisions:
+            accepted_count = sum(1 for item in decisions if item.decision == "accepted")
+            print(f"  AI 视觉审核完成: accepted={accepted_count}, total={len(decisions)}")
+        else:
+            print("  未检测到 OPENAI_API_KEY，已生成离线裁剪审核包。")
     if not args.no_marked_images:
         draw_marked_pages(page_images, candidates, marked_dir)
 

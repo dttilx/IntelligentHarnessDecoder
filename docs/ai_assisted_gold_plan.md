@@ -13,7 +13,8 @@
 - PDF 原生文本提取：使用 PyMuPDF 读取 PDF 内嵌文本，作为 OCR 之外的高置信来源。
 - 候选打分：综合 OCR 置信度、来源类型、重复次数、命名模式、配置/说明文本特征，为每条候选生成分数。
 - AI 文本清洗：先生成可交给 AI 审核的 `ai_review_prompt.md`，再由 AI 对候选名称进行 accepted/candidate/rejected 判断、名称归一化和理由说明。
-- 审核输出：生成 `final/gold_names.txt`、`final/recall_boost_names.txt`、`review/components_review.xlsx` 和 `review/ai_review_prompt.md`，方便人工快速检查。
+- AI 视觉审核：可选开启 `--ai-vision-review`，为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断候选是否真实、是否需要修正。
+- 审核输出：生成 `final/gold_names.txt`、`final/recall_boost_names.txt`、`review/components_review.xlsx` 和 `review/ai_review_prompt.md`；开启视觉审核后额外生成 `final/ai_verified_names.txt`、`review/ai_vision_review.xlsx`、`ai_vision/vision_manifest.csv` 和 `ai_vision/crops/`。
 
 ## 非目标
 
