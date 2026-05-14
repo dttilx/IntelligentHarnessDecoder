@@ -31,19 +31,20 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 
 ## 输出
 
-默认输出到 `output/`：
+默认输出到 `output/`，按用途分目录：
 
-- `output/pages/`：PDF 渲染出的页面图片
-- `output/tiles/`：切片图片
-- `output/ocr_raw/ocr_raw.csv`：OCR 原始识别文本
-- `output/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
-- `output/components.xlsx`：Excel 版结果，包含明细、去重名称和疑似候选名称
-- `output/components.txt`：高准确率的去重元器件名称列表
-- `output/components_candidates.txt`：疑似候选名称列表，用于人工补漏
-- `output/components_review.xlsx`：按证据打分后的审核表，包含分数、来源、页码和判断理由
-- `output/draft_gold_names.txt`：程序自动生成的 AI 初版高可信名称清单
-- `output/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
-- `output/marked_pages/`：带识别框的校验图片
+- `output/final/gold_names.txt`：高准确率元器件名称列表
+- `output/final/recall_boost_names.txt`：高召回补漏名称列表
+- `output/final/components.txt`：规则层高可信名称列表
+- `output/final/components_candidates.txt`：规则层疑似候选名称列表
+- `output/final/rejected_names.txt`：打分后拒绝的名称，便于排查
+- `output/review/components_review.xlsx`：按证据打分后的审核表，包含分数、层级、来源、页码和判断理由
+- `output/review/draft_gold_names.xlsx`：Excel 版高可信名称和召回补漏名称
+- `output/review/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
+- `output/raw/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
+- `output/raw/ocr_raw.csv`：OCR 原始识别文本
+- `output/raw/pdf_text.csv`：PDF 原生文本
+- `output/images/`：PDF 页面图、切片图和带识别框的校验图
 
 ## 准确率和召回率优化
 

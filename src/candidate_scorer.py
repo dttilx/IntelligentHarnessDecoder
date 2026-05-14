@@ -46,6 +46,19 @@ SIGNAL_TERMS = (
     "熄灭",
 )
 OCR_LIKE_NOISE = re.compile(r"[木桃闽闻婴凯圳脉]{1}")
+WEAK_OCR_REPLACEMENTS = (
+    ("刮脉电机", "刮水电机"),
+    ("刮冰电机", "刮水电机"),
+    ("后霞灯", "后雾灯"),
+    ("元光继电器", "远光继电器"),
+    ("非气温度传感器", "排气温度传感器"),
+    ("压翻转电机", "液压翻转电机"),
+    ("压翻转开关", "液压翻转开关"),
+    ("室熔断器", "驾驶室熔断器"),
+    ("室熔断器盒", "驾驶室熔断器盒"),
+    ("盘电线束", "底盘电线束"),
+    ("表板电线束", "仪表板电线束"),
+)
 
 
 @dataclass
@@ -67,16 +80,17 @@ def score_candidates(
     buckets: dict[str, EvidenceBucket] = {}
 
     for item in candidates:
-        _add_evidence(
-            buckets,
-            name=item.name,
-            category=item.category,
-            source="ocr",
-            page=item.page_number,
-            confidence=item.confidence,
-            source_text=item.source_text,
-            decision=item.decision,
-        )
+        for name, source_suffix in _expanded_names(item.name):
+            _add_evidence(
+                buckets,
+                name=name,
+                category=item.category,
+                source=f"ocr{source_suffix}",
+                page=item.page_number,
+                confidence=item.confidence,
+                source_text=item.source_text,
+                decision=item.decision,
+            )
 
     for item in pdf_text_items or []:
         for name in _names_from_pdf_text(item.text):
@@ -102,6 +116,10 @@ def accepted_draft_names(scored: list[ScoredName], threshold: float = 0.75) -> l
         for item in scored
         if item.score >= threshold and item.decision == "accepted"
     ]
+
+
+def names_by_tier(scored: list[ScoredName], tier: str) -> list[str]:
+    return [item.name for item in scored if item.tier == tier]
 
 
 def _add_evidence(
@@ -155,6 +173,36 @@ def _names_from_pdf_text(text: str) -> list[str]:
     return names
 
 
+def _expanded_names(name: str) -> list[tuple[str, str]]:
+    normalized = normalize_name(name)
+    names = [(normalized, "")]
+    for old, new in WEAK_OCR_REPLACEMENTS:
+        if old in normalized:
+            names.append((normalize_name(normalized.replace(old, new)), "_weak_fix"))
+
+    for core_name in _core_names(normalized):
+        names.append((core_name, "_core"))
+
+    unique: dict[str, str] = {}
+    for value, suffix in names:
+        if value and value not in unique:
+            unique[value] = suffix
+    return list(unique.items())
+
+
+def _core_names(name: str) -> list[str]:
+    cores = []
+    separators = ("与", "对接", "总成", "配置化", "端适配")
+    for separator in separators:
+        if separator not in name:
+            continue
+        for part in name.split(separator):
+            part = normalize_name(part.strip())
+            if 3 <= len(part) <= 16 and any(term in part for term in COMPONENT_TERMS):
+                cores.append(part)
+    return cores
+
+
 def _score_bucket(bucket: EvidenceBucket) -> ScoredName:
     score = 0.2
     reasons = []
@@ -168,9 +216,15 @@ def _score_bucket(bucket: EvidenceBucket) -> ScoredName:
     if "pdf_text" in bucket.sources:
         score += 0.18
         reasons.append("pdf_text")
-    if "ocr" in bucket.sources:
+    if any(source.startswith("ocr") for source in bucket.sources):
         score += 0.1
         reasons.append("ocr")
+    if any(source.endswith("_core") for source in bucket.sources):
+        score += 0.08
+        reasons.append("core_extract")
+    if any(source.endswith("_weak_fix") for source in bucket.sources):
+        score += 0.05
+        reasons.append("weak_ocr_fix")
     if len(bucket.pages) > 1:
         score += min(len(bucket.pages), 4) * 0.04
         reasons.append(f"pages={len(bucket.pages)}")
@@ -209,12 +263,14 @@ def _score_bucket(bucket: EvidenceBucket) -> ScoredName:
         reasons.append("long")
 
     score = max(0.0, min(score, 1.0))
-    decision = "accepted" if score >= 0.75 else "candidate" if score >= 0.45 else "rejected"
+    tier = "gold" if score >= 0.75 else "recall_boost" if _is_recall_boost(score, name) else "candidate" if score >= 0.4 else "rejected"
+    decision = "accepted" if tier == "gold" else "candidate" if tier in {"recall_boost", "candidate"} else "rejected"
 
     return ScoredName(
         name=bucket.name,
         normalized_name=bucket.normalized_name,
         decision=decision,
+        tier=tier,
         score=round(score, 4),
         category=bucket.category,
         evidence_count=len(bucket.confidences),
@@ -222,3 +278,11 @@ def _score_bucket(bucket: EvidenceBucket) -> ScoredName:
         pages=",".join(str(page) for page in sorted(bucket.pages)),
         reason="; ".join(reasons),
     )
+
+
+def _is_recall_boost(score: float, name: str) -> bool:
+    if score < 0.5:
+        return False
+    if WIRE_ID_PATTERN.fullmatch(name) or PURE_CONNECTOR_ID_PATTERN.fullmatch(name):
+        return False
+    return any(term in name for term in COMPONENT_TERMS)

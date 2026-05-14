@@ -64,6 +64,7 @@ class ScoredName:
     name: str
     normalized_name: str
     decision: str
+    tier: str
     score: float
     category: str
     evidence_count: int

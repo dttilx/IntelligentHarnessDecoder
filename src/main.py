@@ -65,11 +65,11 @@ def run(args: argparse.Namespace) -> int:
     )
 
     output_dir = config.output_dir
-    pages_dir = output_dir / "pages"
-    tiles_dir = output_dir / "tiles"
-    raw_dir = output_dir / "ocr_raw"
-    pdf_text_dir = output_dir / "pdf_text"
-    marked_dir = output_dir / "marked_pages"
+    images_dir = output_dir / "images"
+    pages_dir = images_dir / "pages"
+    tiles_dir = images_dir / "tiles"
+    raw_dir = output_dir / "raw"
+    marked_dir = images_dir / "marked_pages"
 
     renderer = PDFRenderer(config.render)
     page_count = renderer.get_page_count(pdf_path)
@@ -81,7 +81,7 @@ def run(args: argparse.Namespace) -> int:
     if not args.no_pdf_text:
         print("0/6 提取 PDF 原生文本证据...")
         pdf_text_items = extract_pdf_text_items(pdf_path, selected_pages)
-        save_pdf_text_csv(pdf_text_items, pdf_text_dir / "pdf_text.csv")
+        save_pdf_text_csv(pdf_text_items, raw_dir / "pdf_text.csv")
         print(f"  PDF 文本块: {len(pdf_text_items)}")
 
     print("1/6 渲染 PDF 页面...")
