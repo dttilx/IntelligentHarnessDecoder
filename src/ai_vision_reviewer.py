@@ -564,8 +564,17 @@ def _write_final_answer(
             }
         )
 
-    final_names = _clean_final_names(merged, suppressed, ai_final_names)
-    (final_dir / "final_answer_names.txt").write_text("\n".join(final_names), encoding="utf-8")
+    strict_names = _clean_final_names(merged, suppressed, ai_final_names)
+    balanced_names = _clean_balanced_final_names(merged, suppressed, ai_final_names, final_dir)
+    broad_names = _clean_broad_final_names(merged, suppressed, ai_final_names, final_dir)
+
+    (final_dir / "final_answer_strict.txt").write_text("\n".join(strict_names), encoding="utf-8")
+    (final_dir / "final_answer_balanced.txt").write_text("\n".join(balanced_names), encoding="utf-8")
+    (final_dir / "final_answer_broad.txt").write_text("\n".join(broad_names), encoding="utf-8")
+    (final_dir / "final_answer_names.txt").write_text(
+        "\n".join(balanced_names),
+        encoding="utf-8",
+    )
     pd.DataFrame(rows).to_excel(review_dir / "final_answer_sources.xlsx", index=False)
 
 
@@ -608,6 +617,144 @@ def _clean_final_names(
     names = _remove_generic_subnames(names, ai_final_names)
     names = _remove_final_noise(names)
     return sorted(names.values())
+
+
+def _clean_balanced_final_names(
+    merged: dict[str, str],
+    suppressed: set[str],
+    ai_final_names: list[str],
+    final_dir: Path,
+) -> list[str]:
+    names = {key: value for key, value in merged.items() if key not in suppressed}
+    names = _remove_composite_names(names)
+    names = _remove_hard_final_noise(names)
+    names = _add_recall_boost_names(
+        names,
+        _read_names(final_dir / "recall_boost_names.txt"),
+        limit=180,
+        allow_loose=False,
+    )
+    names = _remove_hard_final_noise(names)
+    names = _restore_ai_names(names, ai_final_names)
+    return sorted(names.values())
+
+
+def _clean_broad_final_names(
+    merged: dict[str, str],
+    suppressed: set[str],
+    ai_final_names: list[str],
+    final_dir: Path,
+) -> list[str]:
+    names = {key: value for key, value in merged.items() if key not in suppressed}
+    names = _remove_hard_final_noise(names)
+    names = _add_recall_boost_names(
+        names,
+        _read_names(final_dir / "recall_boost_names.txt"),
+        limit=420,
+        allow_loose=True,
+    )
+    names = _remove_hard_final_noise(names)
+    names = _restore_ai_names(names, ai_final_names)
+    return sorted(names.values())
+
+
+def _restore_ai_names(names: dict[str, str], ai_final_names: list[str]) -> dict[str, str]:
+    for name in ai_final_names:
+        normalized = normalize_name(name)
+        if normalized and not _is_hard_final_noise_name(normalized):
+            names[normalized] = name
+    return names
+
+
+def _add_recall_boost_names(
+    names: dict[str, str],
+    recall_names: list[str],
+    limit: int,
+    allow_loose: bool,
+) -> dict[str, str]:
+    added = 0
+    for name in recall_names:
+        normalized = normalize_name(name)
+        if not normalized or normalized in names:
+            continue
+        if not _looks_like_useful_recall_name(normalized, allow_loose=allow_loose):
+            continue
+        names[normalized] = name
+        added += 1
+        if added >= limit:
+            break
+    return names
+
+
+RECALL_EXACT_NOISE = {
+    "电机",
+    "开关",
+    "线束",
+    "电线束",
+    "插接器",
+    "控制器",
+    "传感器",
+    "仪表",
+    "模块",
+    "灯",
+    "阀",
+    "泵",
+    "端子",
+    "保险丝",
+    "继电器",
+}
+
+RECALL_TEXT_NOISE_MARKERS = (
+    "线号",
+    "指示",
+    "供电",
+    "输入",
+    "输出",
+    "选择",
+    "默认",
+    "配置",
+    "式样",
+    "标签",
+    "长度",
+    "防护",
+    "颜色",
+    "采用",
+    "测量",
+    "观测",
+    "方向",
+    "状态",
+    "点亮",
+    "熄灭",
+    "安装",
+    "按图示",
+    "剩余",
+    "未提到",
+)
+
+
+def _looks_like_useful_recall_name(name: str, allow_loose: bool) -> bool:
+    if name in RECALL_EXACT_NOISE:
+        return False
+    if _is_hard_final_noise_name(name):
+        return False
+    if len(name) < 3 or len(name) > (30 if allow_loose else 24):
+        return False
+    if any(marker in name for marker in RECALL_TEXT_NOISE_MARKERS):
+        return False
+    if re.fullmatch(r"[\dA-Z.\- ]+", name):
+        return False
+    if name.count(" ") >= 2 and not allow_loose:
+        return False
+    if not _component_suffix(name) and not _has_connector_or_part_prefix(name):
+        return False
+    return True
+
+
+def _has_connector_or_part_prefix(name: str) -> bool:
+    return bool(
+        re.search(r"\b(?:NOx|INOx|OBD|DPF|DOC|SCR|ABS|EBS|ESC|ECAS|ASR|PM|ECU|T-?BOX)\b", name, re.I)
+        or re.search(r"\b(?:X|J|K|C|D)\d{1,4}[A-Z]?\b", name)
+    )
 
 
 def _remove_composite_names(names: dict[str, str]) -> dict[str, str]:
@@ -752,6 +899,23 @@ def _remove_final_noise(names: dict[str, str]) -> dict[str, str]:
 
 
 def _is_final_noise_name(name: str, all_names: set[str]) -> bool:
+    if _is_hard_final_noise_name(name):
+        return True
+    if _is_relation_name_with_better_parts(name, all_names):
+        return True
+    return False
+
+
+def _remove_hard_final_noise(names: dict[str, str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for normalized, name in names.items():
+        if _is_hard_final_noise_name(normalized):
+            continue
+        result[normalized] = name
+    return result
+
+
+def _is_hard_final_noise_name(name: str) -> bool:
     if _is_short_reference_id(name):
         return True
     if name in {"ABS", "EBS", "VCU", "搭铁", "仪表板", "对接插接器"}:
@@ -763,8 +927,6 @@ def _is_final_noise_name(name: str, all_names: set[str]) -> bool:
     if any(name.endswith(suffix) for suffix in FINAL_FRAGMENT_SUFFIXES):
         return True
     if _is_repeated_phrase_noise(name):
-        return True
-    if _is_relation_name_with_better_parts(name, all_names):
         return True
     return False
 
