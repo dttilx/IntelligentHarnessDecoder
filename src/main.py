@@ -8,8 +8,9 @@ from .component_extractor import extract_components
 from .config import AppConfig, OCRConfig, RenderConfig, TileConfig
 from .image_preprocess import create_tiles
 from .ocr_engine import OCREngine, save_raw_ocr_csv
+from .pdf_text_extractor import extract_pdf_text_items, save_pdf_text_csv
 from .pdf_renderer import PDFRenderer, parse_page_spec
-from .result_writer import write_outputs
+from .result_writer import write_outputs, write_review_outputs
 from .visual_debug import draw_marked_pages
 
 
@@ -40,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu", action="store_true", help="启用 PaddleOCR GPU。")
     parser.add_argument("--no-tiles", action="store_true", help="不切片，整页 OCR。")
     parser.add_argument("--no-marked-images", action="store_true", help="不生成标注校验图。")
+    parser.add_argument("--no-pdf-text", action="store_true", help="不提取 PDF 原生文本证据。")
+    parser.add_argument("--no-review-output", action="store_true", help="不生成 AI 辅助审核草稿输出。")
+    parser.add_argument("--score-threshold", type=float, default=0.75, help="草稿标准答案最低分数。")
     return parser
 
 
@@ -64,6 +68,7 @@ def run(args: argparse.Namespace) -> int:
     pages_dir = output_dir / "pages"
     tiles_dir = output_dir / "tiles"
     raw_dir = output_dir / "ocr_raw"
+    pdf_text_dir = output_dir / "pdf_text"
     marked_dir = output_dir / "marked_pages"
 
     renderer = PDFRenderer(config.render)
@@ -72,28 +77,38 @@ def run(args: argparse.Namespace) -> int:
     print(f"PDF: {pdf_path}")
     print(f"总页数: {page_count}，本次处理: {selected_pages}")
 
-    print("1/5 渲染 PDF 页面...")
+    pdf_text_items = []
+    if not args.no_pdf_text:
+        print("0/6 提取 PDF 原生文本证据...")
+        pdf_text_items = extract_pdf_text_items(pdf_path, selected_pages)
+        save_pdf_text_csv(pdf_text_items, pdf_text_dir / "pdf_text.csv")
+        print(f"  PDF 文本块: {len(pdf_text_items)}")
+
+    print("1/6 渲染 PDF 页面...")
     page_images = renderer.render(pdf_path, pages_dir, selected_pages)
 
-    print("2/5 切片并预处理图片...")
+    print("2/6 切片并预处理图片...")
     tiles = []
     for page_image in page_images:
         page_tiles = create_tiles(page_image, tiles_dir, config.tile, preprocess=True)
         tiles.extend(page_tiles)
         print(f"  page {page_image.page_number}: {len(page_tiles)} 个切片")
 
-    print("3/5 执行 PaddleOCR...")
+    print("3/6 执行 PaddleOCR...")
     ocr_engine = OCREngine(config.ocr)
     ocr_results = ocr_engine.recognize_tiles(tiles)
     save_raw_ocr_csv(ocr_results, raw_dir / "ocr_raw.csv")
     print(f"  OCR 文本条数: {len(ocr_results)}")
 
-    print("4/5 提取元器件/部件候选...")
+    print("4/6 提取元器件/部件候选...")
     candidates = extract_components(ocr_results, config.extractor)
     print(f"  候选数量: {len(candidates)}")
 
-    print("5/5 写出结果...")
+    print("5/6 写出结果...")
     write_outputs(candidates, output_dir)
+    if not args.no_review_output:
+        print("6/6 生成 AI 辅助审核草稿...")
+        write_review_outputs(candidates, pdf_text_items, output_dir, threshold=args.score_threshold)
     if not args.no_marked_images:
         draw_marked_pages(page_images, candidates, marked_dir)
 

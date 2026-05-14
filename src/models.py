@@ -49,3 +49,24 @@ class ComponentCandidate:
     source_text: str
     source_image: str
     tile_id: str = ""
+
+
+@dataclass(frozen=True)
+class PDFTextItem:
+    page_number: int
+    text: str
+    box: Box
+    source: str = "pdf_text"
+
+
+@dataclass(frozen=True)
+class ScoredName:
+    name: str
+    normalized_name: str
+    decision: str
+    score: float
+    category: str
+    evidence_count: int
+    sources: str
+    pages: str
+    reason: str

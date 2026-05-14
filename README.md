@@ -40,6 +40,9 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - `output/components.xlsx`：Excel 版结果，包含明细、去重名称和疑似候选名称
 - `output/components.txt`：高准确率的去重元器件名称列表
 - `output/components_candidates.txt`：疑似候选名称列表，用于人工补漏
+- `output/components_review.xlsx`：按证据打分后的审核表，包含分数、来源、页码和判断理由
+- `output/draft_gold_names.txt`：程序自动生成的 AI 初版高可信名称清单
+- `output/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
 - `output/marked_pages/`：带识别框的校验图片
 
 ## 准确率和召回率优化
@@ -54,6 +57,7 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - 对线号、页码、纯数字、过长文本和低置信度文本进行过滤，并按页面、名称和位置做去重，减少重复框和噪声项。
 - 输出分为高可信结果和疑似候选结果：`components.txt` 保持干净，`components_candidates.txt` 保留可能需要人工补漏的编号和短名称。
 - 对相邻 OCR 的短编号和元器件名称做近邻合并，合并结果只进入疑似候选层，用来补回被 OCR 拆开的名称和标识。
+- 额外提取 PDF 原生文本证据，并对候选进行打分，生成 `components_review.xlsx` 和 `draft_gold_names.txt`，用于快速形成 AI 初版标准答案。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 
