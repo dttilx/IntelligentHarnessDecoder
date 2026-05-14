@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -605,6 +606,7 @@ def _clean_final_names(
     names = {key: value for key, value in merged.items() if key not in suppressed}
     names = _remove_composite_names(names)
     names = _remove_generic_subnames(names, ai_final_names)
+    names = _remove_final_noise(names)
     return sorted(names.values())
 
 
@@ -713,3 +715,83 @@ def _has_more_specific_name(name: str, all_names: set[str]) -> bool:
         if other.endswith(name) or name in other:
             return True
     return False
+
+
+FINAL_NOISE_KEYWORDS = (
+    "按图示",
+    "安装框架",
+    "特征编",
+    "蓄电池选",
+    "定位点",
+    "输入",
+)
+
+FINAL_FRAGMENT_SUFFIXES = (
+    "与",
+    "对",
+    "对接",
+    "总",
+    "总成插",
+    "配置化",
+)
+
+FINAL_GARBLED_MARKERS = (
+    "优剩",
+    "TROX",
+)
+
+
+def _remove_final_noise(names: dict[str, str]) -> dict[str, str]:
+    keys = set(names)
+    result: dict[str, str] = {}
+    for normalized, name in names.items():
+        if _is_final_noise_name(normalized, keys):
+            continue
+        result[normalized] = name
+    return result
+
+
+def _is_final_noise_name(name: str, all_names: set[str]) -> bool:
+    if _is_short_reference_id(name):
+        return True
+    if name in {"ABS", "EBS", "VCU", "搭铁", "仪表板", "对接插接器"}:
+        return True
+    if any(keyword in name for keyword in FINAL_NOISE_KEYWORDS):
+        return True
+    if any(marker in name.upper() for marker in FINAL_GARBLED_MARKERS):
+        return True
+    if any(name.endswith(suffix) for suffix in FINAL_FRAGMENT_SUFFIXES):
+        return True
+    if _is_repeated_phrase_noise(name):
+        return True
+    if _is_relation_name_with_better_parts(name, all_names):
+        return True
+    return False
+
+
+def _is_short_reference_id(name: str) -> bool:
+    if len(name) > 5:
+        return False
+    return bool(re.fullmatch(r"[A-Z]{1,3}\d{0,4}[A-Z]?", name))
+
+
+def _is_repeated_phrase_noise(name: str) -> bool:
+    for size in range(2, max(2, len(name) // 2 + 1)):
+        for start in range(0, len(name) - size * 2 + 1):
+            phrase = name[start : start + size]
+            if phrase and phrase * 3 in name:
+                return True
+    return False
+
+
+def _is_relation_name_with_better_parts(name: str, all_names: set[str]) -> bool:
+    if "与" not in name and "接" not in name:
+        return False
+    if not any(term in name for term in ("电线束", "线束", "插接器")):
+        return False
+    shorter = [
+        other
+        for other in all_names
+        if other != name and len(other) < len(name) and other in name and len(other) >= 4
+    ]
+    return len(shorter) >= 1
