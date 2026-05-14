@@ -38,6 +38,18 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
 
 如果没有设置 `OPENAI_API_KEY`，程序不会调用外部 API，只会生成裁剪图和离线审核清单，方便人工查看。
 
+已经跑过 OCR 后，复用缓存重新提取和审核：
+
+```powershell
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --reuse-ocr --no-marked-images
+```
+
+只复用已有候选结果执行视觉审核：
+
+```powershell
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-vision-review --ai-vision-max-names 10
+```
+
 ## 输出
 
 默认输出到 `output/`，按用途分目录：
@@ -54,6 +66,7 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
 - `output/final/ai_verified_names.txt`：AI 视觉确认后的名称，启用 `--ai-vision-review` 且设置 API key 后生成
 - `output/ai_vision/vision_manifest.csv`：送审名称、裁剪图、页码和 OCR 原文清单
 - `output/ai_vision/crops/`：候选名称附近的原图裁剪，用于 AI 视觉审核或人工复核
+- `output/ai_vision/vision_review_cache.jsonl`：AI 视觉审核缓存，避免同一裁剪图重复调用 API
 - `output/raw/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
 - `output/raw/ocr_raw.csv`：OCR 原始识别文本
 - `output/raw/pdf_text.csv`：PDF 原生文本
@@ -73,6 +86,8 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
 - 对相邻 OCR 的短编号和元器件名称做近邻合并，合并结果只进入疑似候选层，用来补回被 OCR 拆开的名称和标识。
 - 额外提取 PDF 原生文本证据，并对候选进行打分，生成 `components_review.xlsx` 和 `draft_gold_names.txt`，用于快速形成 AI 初版标准答案。
 - 可选启用 AI 视觉审核：程序会为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断接受、修正或拒绝候选，输出 `ai_verified_names.txt`。
+- 调试时可以使用 `--reuse-ocr` 复用 `output/raw/ocr_raw.csv`，跳过 PDF 渲染、切片和 PaddleOCR；也可以用 `--vision-only` 只重跑视觉审核。
+- AI 视觉审核默认最多送审 30 个候选，支持 `--ai-vision-max-names` 调整；每次请求默认 30 秒超时，支持 `--ai-vision-timeout` 调整。遇到额度不足或鉴权错误会停止后续请求。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 

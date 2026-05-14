@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -20,10 +21,12 @@ from .models import ComponentCandidate, PDFTextItem, PageImage, ScoredName
 class VisionReviewConfig:
     enabled: bool = False
     model: str = "gpt-4.1-mini"
-    max_names: int = 120
+    max_names: int = 30
     margin: int = 180
-    timeout: int = 90
+    timeout: int = 30
     api_key_env: str = "OPENAI_API_KEY"
+    offline: bool = False
+    use_cache: bool = True
 
 
 @dataclass(frozen=True)
@@ -69,17 +72,30 @@ def run_ai_vision_review(
     _write_manifest(evidence, vision_dir / "vision_manifest.csv")
 
     api_key = os.environ.get(config.api_key_env, "").strip()
-    if not api_key:
+    if config.offline or not api_key:
         _write_offline_prompt(evidence, vision_dir / "offline_vision_review_prompt.md")
         return []
 
     decisions: list[VisionDecision] = []
+    cache_path = vision_dir / "vision_review_cache.jsonl"
+    cache = _load_cache(cache_path) if config.use_cache else {}
     jsonl_path = vision_dir / "vision_review.jsonl"
     with jsonl_path.open("w", encoding="utf-8") as writer:
-        for item in evidence:
-            decision = _review_one(item, api_key, config)
+        for index, item in enumerate(evidence, start=1):
+            cache_key = _cache_key(item)
+            if cache_key in cache:
+                decision = cache[cache_key]
+                print(f"  AI vision {index}/{len(evidence)} cached: {item.name}")
+            else:
+                print(f"  AI vision {index}/{len(evidence)}: {item.name}")
+                decision = _review_one(item, api_key, config)
+                if config.use_cache and not _is_fatal_error(decision):
+                    _append_cache(cache_path, cache_key, decision)
             decisions.append(decision)
             writer.write(json.dumps(decision.__dict__, ensure_ascii=False) + "\n")
+            if _is_fatal_error(decision):
+                print(f"  AI vision stopped: {decision.reason}")
+                break
 
     _write_decisions(decisions, review_dir, final_dir)
     return decisions
@@ -281,6 +297,49 @@ def _error_decision(evidence: VisionEvidence, reason: str) -> VisionDecision:
         page_number=evidence.page_number,
         crop_path=str(evidence.crop_path),
     )
+
+
+def _is_fatal_error(decision: VisionDecision) -> bool:
+    reason = decision.reason.lower()
+    fatal_markers = (
+        "insufficient_quota",
+        "invalid_api_key",
+        "incorrect api key",
+        "unauthorized",
+        "billing",
+    )
+    return any(marker in reason for marker in fatal_markers)
+
+
+def _cache_key(evidence: VisionEvidence) -> str:
+    digest = hashlib.sha256(evidence.crop_path.read_bytes()).hexdigest()[:24]
+    return f"{evidence.normalized_name}|{digest}"
+
+
+def _load_cache(path: Path) -> dict[str, VisionDecision]:
+    cache: dict[str, VisionDecision] = {}
+    if not path.exists():
+        return cache
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            key = str(row["cache_key"])
+            data = row["decision"]
+            decision = VisionDecision(**data)
+            if _is_fatal_error(decision):
+                continue
+            cache[key] = decision
+        except (KeyError, TypeError, json.JSONDecodeError):
+            continue
+    return cache
+
+
+def _append_cache(path: Path, cache_key: str, decision: VisionDecision) -> None:
+    row = {"cache_key": cache_key, "decision": decision.__dict__}
+    with path.open("a", encoding="utf-8") as writer:
+        writer.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _write_manifest(evidence: list[VisionEvidence], path: Path) -> None:
