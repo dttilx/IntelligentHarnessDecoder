@@ -46,6 +46,7 @@ BAD_CONTEXT_KEYWORDS = (
     "按QC",
     "按GB",
     "技术条件",
+    "根部测量",
     "测量点",
     "观测方向",
     "分布位置",
@@ -62,7 +63,30 @@ BAD_CONTEXT_KEYWORDS = (
     "没有用到",
     "盲堵",
     "出线端视",
+    "焊接",
 )
+INCOMPLETE_NAMES = {
+    "EBS-",
+    "合仪表2",
+    "左组合",
+    "右组合",
+    "喇叭转",
+    "灯光旋",
+    "组合仪",
+    "挡开关",
+    "速箱低速挡开关",
+}
+GENERIC_NAMES = {
+    "仪表",
+    "传感器",
+    "线束",
+    "插接器",
+    "熔断器",
+    "喇叭",
+    "雾灯",
+}
+CONNECTOR_ID_PATTERN = re.compile(r"^(?:J|X|CN|XS|XP)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
+WIRE_ID_PATTERN = re.compile(r"^(?:A|B|S|M)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 OCR_REPLACEMENTS = (
     ("QBD诊断插座", "OBD诊断插座"),
     ("刺叭", "喇叭"),
@@ -71,6 +95,11 @@ OCR_REPLACEMENTS = (
     ("由线束", "电线束"),
     ("阵身控制器", "车身控制器"),
     ("身控制器", "车身控制器"),
+    ("多态开关", "多状态开关"),
+    ("接左车身电线束", "左车身电线束"),
+    ("接左车门电线束", "左车门电线束"),
+    ("接右车身电线束", "右车身电线束"),
+    ("接右车门电线束", "右车门电线束"),
 )
 
 
@@ -154,6 +183,7 @@ def _clean_component_phrase(text: str) -> str:
     value = PUNCTUATION_PATTERN.sub(" ", value)
     value = SPACE_PATTERN.sub(" ", value).strip()
     value = re.sub(r"^\d{1,4}[A-Za-z]?(?=[\u4e00-\u9fff])", "", value).strip()
+    value = _trim_part_number_tail(value)
 
     for anchor in ("车身控制器", "组合仪表", "OBD诊断插座"):
         index = value.find(anchor)
@@ -164,6 +194,16 @@ def _clean_component_phrase(text: str) -> str:
         matches = list(COMPONENT_NAME_PATTERN.finditer(value))
         if matches:
             value = min((match.group(0) for match in matches), key=len)
+
+    return value
+
+
+def _trim_part_number_tail(value: str) -> str:
+    for suffix in COMPONENT_SUFFIXES:
+        marker = f"{suffix}DJ"
+        marker_index = value.find(marker)
+        if marker_index >= 0:
+            return value[: marker_index + len(suffix)]
 
     return value
 
@@ -183,6 +223,10 @@ def _is_noise(name: str) -> bool:
     value = normalize_name(name)
     if len(value) < 2:
         return True
+    if value in INCOMPLETE_NAMES:
+        return True
+    if WIRE_ID_PATTERN.fullmatch(value):
+        return True
     if len(value) > 24:
         return True
     if re.fullmatch(r"\d+", value):
@@ -196,6 +240,12 @@ def _is_noise(name: str) -> bool:
     if _is_bad_context(value):
         return True
     return False
+
+
+def _is_generic_name(name: str, all_names: set[str]) -> bool:
+    if name not in GENERIC_NAMES:
+        return False
+    return any(name in other and name != other for other in all_names)
 
 
 def extract_components(
@@ -249,7 +299,17 @@ def deduplicate_candidates(
 def unique_component_names(candidates: list[ComponentCandidate]) -> list[str]:
     names: dict[str, ComponentCandidate] = {}
     for item in candidates:
+        if _is_noise(item.name):
+            continue
         existing = names.get(item.normalized_name)
         if existing is None or item.confidence > existing.confidence:
             names[item.normalized_name] = item
-    return [item.name for item in sorted(names.values(), key=lambda x: (x.category, x.normalized_name))]
+
+    all_names = {item.name for item in names.values()}
+    clean_items = [
+        item
+        for item in names.values()
+        if not _is_generic_name(item.name, all_names)
+        and (item.category != "reference" or CONNECTOR_ID_PATTERN.fullmatch(item.name))
+    ]
+    return [item.name for item in sorted(clean_items, key=lambda x: (x.category, x.normalized_name))]
