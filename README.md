@@ -71,6 +71,8 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-
 - `output/review/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
 - `output/review/ai_vision_review.xlsx`：AI 视觉审核结果，启用 `--ai-vision-review` 且设置 API key 后生成
 - `output/final/ai_verified_names.txt`：AI 视觉确认后的名称，启用 `--ai-vision-review` 且设置 API key 后生成
+- `output/final/final_answer_names.txt`：规则高可信结果与 AI 审核通过结果合并后的最终答案
+- `output/review/final_answer_sources.xlsx`：最终答案来源表，标明来自规则还是 AI 审核
 - `output/ai_vision/vision_manifest.csv`：送审名称、裁剪图、页码和 OCR 原文清单
 - `output/ai_vision/crops/`：候选名称附近的原图裁剪，用于 AI 视觉审核或人工复核
 - `output/ai_vision/vision_review_cache.jsonl`：AI 视觉审核缓存，避免同一裁剪图重复调用 API

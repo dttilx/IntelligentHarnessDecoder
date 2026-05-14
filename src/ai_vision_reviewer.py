@@ -506,3 +506,59 @@ def _write_decisions(
         seen.add(normalized)
         accepted_names.append(item.final_name)
     (final_dir / "ai_verified_names.txt").write_text("\n".join(accepted_names), encoding="utf-8")
+    _write_final_answer(decisions, final_dir, review_dir)
+
+
+def _write_final_answer(
+    decisions: list[VisionDecision],
+    final_dir: Path,
+    review_dir: Path,
+) -> None:
+    rule_names = _read_names(final_dir / "gold_names.txt")
+    rows = []
+    merged: dict[str, str] = {}
+
+    for name in rule_names:
+        normalized = normalize_name(name)
+        if not normalized:
+            continue
+        merged.setdefault(normalized, name)
+        rows.append(
+            {
+                "name": name,
+                "normalized_name": normalized,
+                "source": "rule_gold",
+                "raw_name": "",
+                "confidence": "",
+                "reason": "",
+            }
+        )
+
+    for item in decisions:
+        if item.decision != "accepted" or item.confidence < 0.65:
+            continue
+        final_name = normalize_name(item.final_name)
+        if not final_name:
+            continue
+        normalized = normalize_name(final_name)
+        merged[normalized] = final_name
+        rows.append(
+            {
+                "name": final_name,
+                "normalized_name": normalized,
+                "source": "ai_accepted",
+                "raw_name": item.raw_name,
+                "confidence": item.confidence,
+                "reason": item.reason,
+            }
+        )
+
+    final_names = sorted(merged.values())
+    (final_dir / "final_answer_names.txt").write_text("\n".join(final_names), encoding="utf-8")
+    pd.DataFrame(rows).to_excel(review_dir / "final_answer_sources.xlsx", index=False)
+
+
+def _read_names(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
