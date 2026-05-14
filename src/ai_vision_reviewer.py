@@ -517,6 +517,8 @@ def _write_final_answer(
     rule_names = _read_names(final_dir / "gold_names.txt")
     rows = []
     merged: dict[str, str] = {}
+    suppressed: set[str] = set()
+    ai_final_names: list[str] = []
 
     for name in rule_names:
         normalized = normalize_name(name)
@@ -541,6 +543,14 @@ def _write_final_answer(
         if not final_name:
             continue
         normalized = normalize_name(final_name)
+        raw_normalized = normalize_name(item.raw_name)
+        if raw_normalized and raw_normalized != normalized:
+            if _is_lossy_generalization(raw_normalized, normalized):
+                final_name = item.raw_name
+                normalized = raw_normalized
+            else:
+                suppressed.add(raw_normalized)
+        ai_final_names.append(final_name)
         merged[normalized] = final_name
         rows.append(
             {
@@ -553,7 +563,7 @@ def _write_final_answer(
             }
         )
 
-    final_names = sorted(merged.values())
+    final_names = _clean_final_names(merged, suppressed, ai_final_names)
     (final_dir / "final_answer_names.txt").write_text("\n".join(final_names), encoding="utf-8")
     pd.DataFrame(rows).to_excel(review_dir / "final_answer_sources.xlsx", index=False)
 
@@ -562,3 +572,144 @@ def _read_names(path: Path) -> list[str]:
     if not path.exists():
         return []
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+GENERIC_FINAL_SUFFIXES = (
+    "控制器",
+    "传感器",
+    "继电器",
+    "熔断器",
+    "保险丝",
+    "保险盒",
+    "插接器",
+    "电线束",
+    "线束",
+    "电磁阀",
+    "电机",
+    "开关",
+    "仪表",
+    "模块",
+    "喇叭",
+    "灯",
+    "泵",
+    "阀",
+    "盒",
+)
+
+
+def _clean_final_names(
+    merged: dict[str, str],
+    suppressed: set[str],
+    ai_final_names: list[str],
+) -> list[str]:
+    names = {key: value for key, value in merged.items() if key not in suppressed}
+    names = _remove_composite_names(names)
+    names = _remove_generic_subnames(names, ai_final_names)
+    return sorted(names.values())
+
+
+def _remove_composite_names(names: dict[str, str]) -> dict[str, str]:
+    keys = set(names)
+    result: dict[str, str] = {}
+    for normalized, name in names.items():
+        if _is_covered_by_shorter_names(normalized, keys):
+            continue
+        if _is_redundant_concatenated_name(normalized, keys):
+            continue
+        result[normalized] = name
+    return result
+
+
+def _is_covered_by_shorter_names(name: str, all_names: set[str]) -> bool:
+    if " " not in name and "/" not in name and "／" not in name:
+        return False
+    parts = [
+        normalize_name(part)
+        for part in name.replace("／", "/").replace(" ", "/").split("/")
+        if normalize_name(part)
+    ]
+    if len(parts) < 2:
+        return False
+    covered = 0
+    for part in parts:
+        if part in all_names:
+            covered += 1
+            continue
+        if any(part in other and other != name for other in all_names):
+            covered += 1
+    return covered >= 2
+
+
+COMPOSITE_ACTION_MARKERS = (
+    "请求",
+    "禁止",
+    "允许",
+    "控制",
+    "调整",
+    "调节",
+    "转换",
+    "翻转",
+    "诊断",
+    "再生",
+)
+
+
+def _is_lossy_generalization(raw_name: str, final_name: str) -> bool:
+    if len(final_name) >= len(raw_name):
+        return False
+    if raw_name.startswith(final_name):
+        tail = raw_name[len(final_name) :]
+        return bool(tail) and all(ch.isdigit() or ch.isascii() for ch in tail)
+    return False
+
+
+def _is_redundant_concatenated_name(name: str, all_names: set[str]) -> bool:
+    if len(name) < 8:
+        return False
+    if sum(1 for marker in COMPOSITE_ACTION_MARKERS if marker in name) < 2:
+        return False
+    suffix = _component_suffix(name)
+    if not suffix:
+        return False
+    shorter_related = [
+        other
+        for other in all_names
+        if other != name and len(other) < len(name) and other.endswith(suffix) and other in name
+    ]
+    return len(shorter_related) >= 1
+
+
+def _component_suffix(name: str) -> str:
+    for suffix in sorted(GENERIC_FINAL_SUFFIXES, key=len, reverse=True):
+        if name.endswith(suffix):
+            return suffix
+    return ""
+
+
+def _remove_generic_subnames(
+    names: dict[str, str],
+    ai_final_names: list[str],
+) -> dict[str, str]:
+    ai_keys = {normalize_name(name) for name in ai_final_names}
+    result: dict[str, str] = {}
+    for normalized, name in names.items():
+        if normalized in ai_keys:
+            result[normalized] = name
+            continue
+        if _has_more_specific_name(normalized, set(names)):
+            continue
+        result[normalized] = name
+    return result
+
+
+def _has_more_specific_name(name: str, all_names: set[str]) -> bool:
+    if not any(name.endswith(suffix) for suffix in GENERIC_FINAL_SUFFIXES):
+        return False
+    for other in all_names:
+        if other == name:
+            continue
+        if len(other) <= len(name):
+            continue
+        if other.endswith(name) or name in other:
+            return True
+    return False
