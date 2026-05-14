@@ -8,6 +8,9 @@ from .models import ComponentCandidate, OCRResult
 
 PUNCTUATION_PATTERN = re.compile(r"""[，。；;:：、/\\\[\]【】()（）{}<>《》"'`]+""")
 SPACE_PATTERN = re.compile(r"\s+")
+MAX_MERGED_TEXT_LENGTH = 32
+MERGE_X_GAP = 180
+MERGE_Y_GAP = 140
 COMPONENT_SUFFIXES = (
     "控制器",
     "传感器",
@@ -87,6 +90,7 @@ GENERIC_NAMES = {
 }
 CONNECTOR_ID_PATTERN = re.compile(r"^(?:J|X|CN|XS|XP)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 WIRE_ID_PATTERN = re.compile(r"^(?:A|B|S|M)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
+SHORT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,10}$")
 OCR_REPLACEMENTS = (
     ("QBD诊断插座", "OBD诊断插座"),
     ("刺叭", "喇叭"),
@@ -219,6 +223,74 @@ def _regex_candidates(text: str, config: ExtractorConfig) -> list[str]:
     return candidates
 
 
+def _box_union(left: ComponentCandidate | OCRResult, right: OCRResult) -> tuple[float, float, float, float]:
+    return (
+        min(left.box[0], right.box[0]),
+        min(left.box[1], right.box[1]),
+        max(left.box[2], right.box[2]),
+        max(left.box[3], right.box[3]),
+    )
+
+
+def _box_center(box: tuple[float, float, float, float]) -> tuple[float, float]:
+    return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+
+
+def _nearby(left: OCRResult, right: OCRResult) -> bool:
+    if left.page_number != right.page_number:
+        return False
+    left_x, left_y = _box_center(left.box)
+    right_x, right_y = _box_center(right.box)
+    return abs(left_x - right_x) <= MERGE_X_GAP and abs(left_y - right_y) <= MERGE_Y_GAP
+
+
+def _should_merge_text(text: str) -> bool:
+    value = normalize_text(text)
+    if _is_bad_context(value):
+        return False
+    if len(value) > MAX_MERGED_TEXT_LENGTH:
+        return False
+    if SHORT_LABEL_PATTERN.fullmatch(value):
+        return True
+    return any(keyword in value for keyword in COMPONENT_SUFFIXES)
+
+
+def _merged_ocr_results(ocr_results: list[OCRResult]) -> list[OCRResult]:
+    by_page: dict[int, list[OCRResult]] = {}
+    for result in ocr_results:
+        if _should_merge_text(result.text):
+            by_page.setdefault(result.page_number, []).append(result)
+
+    merged: list[OCRResult] = []
+    seen: set[tuple[int, str, int, int]] = set()
+    for page_results in by_page.values():
+        ordered = sorted(page_results, key=lambda item: (item.box[1], item.box[0]))
+        for index, left in enumerate(ordered):
+            for right in ordered[index + 1 : index + 8]:
+                if not _nearby(left, right):
+                    continue
+                combined = normalize_text(f"{left.text} {right.text}")
+                if len(combined) > MAX_MERGED_TEXT_LENGTH or _is_bad_context(combined):
+                    continue
+                box = _box_union(left, right)
+                key = (left.page_number, combined, round(box[0] / 80), round(box[1] / 80))
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(
+                    OCRResult(
+                        page_number=left.page_number,
+                        text=combined,
+                        confidence=min(left.confidence, right.confidence) * 0.92,
+                        box=box,
+                        source_image=left.source_image,
+                        tile_id=f"{left.tile_id}+{right.tile_id}",
+                    )
+                )
+
+    return merged
+
+
 def _is_noise(name: str) -> bool:
     value = normalize_name(name)
     if _is_rejected_name(value):
@@ -258,6 +330,8 @@ def _is_generic_name(name: str, all_names: set[str]) -> bool:
 def decide_candidate(item: ComponentCandidate, all_names: set[str] | None = None) -> str:
     if _is_rejected_name(item.name):
         return "rejected"
+    if item.decision == "candidate":
+        return "candidate"
     if WIRE_ID_PATTERN.fullmatch(item.name):
         return "candidate"
     if item.category == "reference" and not CONNECTOR_ID_PATTERN.fullmatch(item.name):
@@ -273,7 +347,10 @@ def extract_components(
 ) -> list[ComponentCandidate]:
     candidates: list[ComponentCandidate] = []
 
-    for result in ocr_results:
+    merged_results = _merged_ocr_results(ocr_results)
+    merged_result_ids = {id(result) for result in merged_results}
+    all_results = ocr_results + merged_results
+    for result in all_results:
         if result.confidence < config.min_component_confidence:
             continue
         text = normalize_text(result.text)
@@ -287,7 +364,7 @@ def extract_components(
                     name=name,
                     normalized_name=normalize_name(name),
                     category=classify_candidate(name, text, config),
-                    decision="accepted",
+                    decision="candidate" if id(result) in merged_result_ids else "accepted",
                     page_number=result.page_number,
                     confidence=result.confidence,
                     box=result.box,
