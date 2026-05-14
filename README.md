@@ -36,9 +36,10 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - `output/pages/`：PDF 渲染出的页面图片
 - `output/tiles/`：切片图片
 - `output/ocr_raw/ocr_raw.csv`：OCR 原始识别文本
-- `output/components.csv`：元器件候选明细
-- `output/components.xlsx`：Excel 版结果，包含明细和去重名称
-- `output/components.txt`：去重后的元器件名称列表
+- `output/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
+- `output/components.xlsx`：Excel 版结果，包含明细、去重名称和疑似候选名称
+- `output/components.txt`：高准确率的去重元器件名称列表
+- `output/components_candidates.txt`：疑似候选名称列表，用于人工补漏
 - `output/marked_pages/`：带识别框的校验图片
 
 ## 准确率和召回率优化
@@ -51,6 +52,7 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - 对常见 OCR 误识别做归一化修正，例如 `QBD诊断插座` 会修正为 `OBD诊断插座`，`刺叭`/`剌叭` 会修正为 `喇叭`，`问歇` 会修正为 `间歇`。
 - 过滤技术说明类文本，例如包含测量点、观测方向、分布位置、保持力、工作温度、热缩管、压接、选装关系等内容的长句，减少把说明文字误当成元器件名称。
 - 对线号、页码、纯数字、过长文本和低置信度文本进行过滤，并按页面、名称和位置做去重，减少重复框和噪声项。
+- 输出分为高可信结果和疑似候选结果：`components.txt` 保持干净，`components_candidates.txt` 保留可能需要人工补漏的编号和短名称。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 

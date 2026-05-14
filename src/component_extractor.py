@@ -221,11 +221,18 @@ def _regex_candidates(text: str, config: ExtractorConfig) -> list[str]:
 
 def _is_noise(name: str) -> bool:
     value = normalize_name(name)
+    if _is_rejected_name(value):
+        return True
+    if WIRE_ID_PATTERN.fullmatch(value):
+        return True
+    return False
+
+
+def _is_rejected_name(name: str) -> bool:
+    value = normalize_name(name)
     if len(value) < 2:
         return True
     if value in INCOMPLETE_NAMES:
-        return True
-    if WIRE_ID_PATTERN.fullmatch(value):
         return True
     if len(value) > 24:
         return True
@@ -248,6 +255,18 @@ def _is_generic_name(name: str, all_names: set[str]) -> bool:
     return any(name in other and name != other for other in all_names)
 
 
+def decide_candidate(item: ComponentCandidate, all_names: set[str] | None = None) -> str:
+    if _is_rejected_name(item.name):
+        return "rejected"
+    if WIRE_ID_PATTERN.fullmatch(item.name):
+        return "candidate"
+    if item.category == "reference" and not CONNECTOR_ID_PATTERN.fullmatch(item.name):
+        return "candidate"
+    if all_names is not None and _is_generic_name(item.name, all_names):
+        return "candidate"
+    return "accepted"
+
+
 def extract_components(
     ocr_results: list[OCRResult],
     config: ExtractorConfig,
@@ -261,13 +280,14 @@ def extract_components(
         raw_names = _regex_candidates(text, config) + _keyword_candidates(text, config)
         for raw_name in raw_names:
             name = normalize_name(raw_name)
-            if _is_noise(name):
+            if _is_rejected_name(name):
                 continue
             candidates.append(
                 ComponentCandidate(
                     name=name,
                     normalized_name=normalize_name(name),
                     category=classify_candidate(name, text, config),
+                    decision="accepted",
                     page_number=result.page_number,
                     confidence=result.confidence,
                     box=result.box,
@@ -297,19 +317,49 @@ def deduplicate_candidates(
 
 
 def unique_component_names(candidates: list[ComponentCandidate]) -> list[str]:
+    return [item.name for item in unique_components_by_decision(candidates, "accepted")]
+
+
+def unique_candidate_names(candidates: list[ComponentCandidate]) -> list[str]:
+    return [item.name for item in unique_components_by_decision(candidates, "candidate")]
+
+
+def unique_components_by_decision(
+    candidates: list[ComponentCandidate],
+    decision: str,
+) -> list[ComponentCandidate]:
     names: dict[str, ComponentCandidate] = {}
     for item in candidates:
-        if _is_noise(item.name):
-            continue
         existing = names.get(item.normalized_name)
         if existing is None or item.confidence > existing.confidence:
             names[item.normalized_name] = item
 
     all_names = {item.name for item in names.values()}
-    clean_items = [
-        item
-        for item in names.values()
-        if not _is_generic_name(item.name, all_names)
-        and (item.category != "reference" or CONNECTOR_ID_PATTERN.fullmatch(item.name))
-    ]
-    return [item.name for item in sorted(clean_items, key=lambda x: (x.category, x.normalized_name))]
+    selected = []
+    for item in names.values():
+        actual_decision = decide_candidate(item, all_names)
+        if actual_decision != decision:
+            continue
+        selected.append(_replace_decision(item, actual_decision))
+
+    return sorted(selected, key=lambda x: (x.category, x.normalized_name))
+
+
+def with_candidate_decisions(candidates: list[ComponentCandidate]) -> list[ComponentCandidate]:
+    all_names = {item.name for item in candidates}
+    return [_replace_decision(item, decide_candidate(item, all_names)) for item in candidates]
+
+
+def _replace_decision(item: ComponentCandidate, decision: str) -> ComponentCandidate:
+    return ComponentCandidate(
+        name=item.name,
+        normalized_name=item.normalized_name,
+        category=item.category,
+        decision=decision,
+        page_number=item.page_number,
+        confidence=item.confidence,
+        box=item.box,
+        source_text=item.source_text,
+        source_image=item.source_image,
+        tile_id=item.tile_id,
+    )

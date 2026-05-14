@@ -42,6 +42,7 @@ class ComponentCandidate:
     name: str
     normalized_name: str
     category: str
+    decision: str
     page_number: int
     confidence: float
     box: Box
