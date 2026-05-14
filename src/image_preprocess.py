@@ -8,6 +8,11 @@ from .config import TileConfig
 from .models import ImageTile, PageImage
 
 
+# Circuit diagrams can render to very large page images at 300 DPI.
+# They are generated locally from the input PDF, then immediately tiled.
+Image.MAX_IMAGE_PIXELS = None
+
+
 def preprocess_image(input_path: Path, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(input_path) as image:
