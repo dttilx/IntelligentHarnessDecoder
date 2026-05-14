@@ -178,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reuse-ocr", action="store_true", help="复用 output/raw/ocr_raw.csv，跳过切片和 OCR。")
     parser.add_argument("--vision-only", action="store_true", help="只复用已有候选结果执行 AI 视觉审核。")
     parser.add_argument("--ai-vision-review", action="store_true", help="启用 AI 视觉审核候选名称。")
+    parser.add_argument("--ai-provider", choices=("openai", "dashscope"), default="openai", help="AI 视觉审核服务商。")
     parser.add_argument("--ai-vision-model", default="gpt-4.1-mini", help="AI 视觉审核模型。")
     parser.add_argument("--ai-vision-max-names", type=int, default=30, help="最多送审的名称数量。")
     parser.add_argument("--ai-vision-margin", type=int, default=180, help="候选文字裁剪外扩像素。")
@@ -235,6 +236,7 @@ def run(args: argparse.Namespace) -> int:
             output_dir,
             VisionReviewConfig(
                 enabled=True,
+                provider=args.ai_provider,
                 model=args.ai_vision_model,
                 max_names=args.ai_vision_max_names,
                 margin=args.ai_vision_margin,
@@ -314,6 +316,7 @@ def run(args: argparse.Namespace) -> int:
             output_dir,
             VisionReviewConfig(
                 enabled=True,
+                provider=args.ai_provider,
                 model=args.ai_vision_model,
                 max_names=args.ai_vision_max_names,
                 margin=args.ai_vision_margin,

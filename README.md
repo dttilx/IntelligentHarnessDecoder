@@ -38,6 +38,13 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
 
 如果没有设置 `OPENAI_API_KEY`，程序不会调用外部 API，只会生成裁剪图和离线审核清单，方便人工查看。
 
+使用阿里云百炼 DashScope 的 Qwen3-VL-Flash：
+
+```powershell
+$env:DASHSCOPE_API_KEY="你的阿里百炼 API Key"
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-vision-review --ai-provider dashscope --ai-vision-model qwen3-vl-flash --ai-vision-max-names 10
+```
+
 已经跑过 OCR 后，复用缓存重新提取和审核：
 
 ```powershell
@@ -88,6 +95,7 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-
 - 可选启用 AI 视觉审核：程序会为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断接受、修正或拒绝候选，输出 `ai_verified_names.txt`。
 - 调试时可以使用 `--reuse-ocr` 复用 `output/raw/ocr_raw.csv`，跳过 PDF 渲染、切片和 PaddleOCR；也可以用 `--vision-only` 只重跑视觉审核。
 - AI 视觉审核默认最多送审 30 个候选，支持 `--ai-vision-max-names` 调整；每次请求默认 30 秒超时，支持 `--ai-vision-timeout` 调整。遇到额度不足或鉴权错误会停止后续请求。
+- 视觉审核支持 `--ai-provider openai` 和 `--ai-provider dashscope`。DashScope 使用 `DASHSCOPE_API_KEY`，适合调用阿里云百炼的 `qwen3-vl-flash` 等视觉理解模型。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 

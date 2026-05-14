@@ -20,11 +20,12 @@ from .models import ComponentCandidate, PDFTextItem, PageImage, ScoredName
 @dataclass(frozen=True)
 class VisionReviewConfig:
     enabled: bool = False
+    provider: str = "openai"
     model: str = "gpt-4.1-mini"
     max_names: int = 30
     margin: int = 180
     timeout: int = 30
-    api_key_env: str = "OPENAI_API_KEY"
+    api_key_env: str = ""
     offline: bool = False
     use_cache: bool = True
 
@@ -71,7 +72,7 @@ def run_ai_vision_review(
     evidence = _build_evidence(selected, candidates, page_images, crops_dir, config.margin)
     _write_manifest(evidence, vision_dir / "vision_manifest.csv")
 
-    api_key = os.environ.get(config.api_key_env, "").strip()
+    api_key = os.environ.get(_api_key_env(config), "").strip()
     if config.offline or not api_key:
         _write_offline_prompt(evidence, vision_dir / "offline_vision_review_prompt.md")
         return []
@@ -82,7 +83,7 @@ def run_ai_vision_review(
     jsonl_path = vision_dir / "vision_review.jsonl"
     with jsonl_path.open("w", encoding="utf-8") as writer:
         for index, item in enumerate(evidence, start=1):
-            cache_key = _cache_key(item)
+            cache_key = _cache_key(item, config)
             if cache_key in cache:
                 decision = cache[cache_key]
                 print(f"  AI vision {index}/{len(evidence)} cached: {item.name}")
@@ -172,6 +173,18 @@ def _review_one(
     api_key: str,
     config: VisionReviewConfig,
 ) -> VisionDecision:
+    if config.provider == "dashscope":
+        return _review_one_chat_completion(evidence, api_key, config)
+    if config.provider == "openai":
+        return _review_one_openai_response(evidence, api_key, config)
+    return _error_decision(evidence, f"未知 AI provider: {config.provider}")
+
+
+def _review_one_openai_response(
+    evidence: VisionEvidence,
+    api_key: str,
+    config: VisionReviewConfig,
+) -> VisionDecision:
     payload = {
         "model": config.model,
         "input": [
@@ -205,16 +218,16 @@ def _review_one(
             body = response.read().decode("utf-8")
     except error.HTTPError as exc:
         message = exc.read().decode("utf-8", errors="ignore")
-        return _error_decision(evidence, f"HTTP {exc.code}: {message[:300]}")
+        return _error_decision(evidence, f"HTTP {exc.code}: {message[:500]}")
     except OSError as exc:
         return _error_decision(evidence, str(exc))
 
-    data = json.loads(body)
-    text = _response_text(data)
     try:
+        data = json.loads(body)
+        text = _openai_response_text(data)
         parsed = _parse_json_text(text)
-    except ValueError:
-        return _error_decision(evidence, f"模型未返回可解析 JSON: {text[:300]}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return _error_decision(evidence, f"模型未返回可解析 JSON: {exc}")
 
     return VisionDecision(
         raw_name=evidence.name,
@@ -225,6 +238,81 @@ def _review_one(
         page_number=evidence.page_number,
         crop_path=str(evidence.crop_path),
     )
+
+
+def _review_one_chat_completion(
+    evidence: VisionEvidence,
+    api_key: str,
+    config: VisionReviewConfig,
+) -> VisionDecision:
+    payload = {
+        "model": config.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _vision_prompt(evidence),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _image_data_url(evidence.crop_path),
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    req = request.Request(
+        _provider_url(config),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=config.timeout) as response:
+            body = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        message = exc.read().decode("utf-8", errors="ignore")
+        return _error_decision(evidence, f"HTTP {exc.code}: {message[:500]}")
+    except OSError as exc:
+        return _error_decision(evidence, str(exc))
+
+    try:
+        data = json.loads(body)
+        text = _chat_completion_text(data)
+        parsed = _parse_json_text(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return _error_decision(evidence, f"模型未返回可解析 JSON: {exc}")
+
+    return VisionDecision(
+        raw_name=evidence.name,
+        final_name=normalize_name(str(parsed.get("final_name") or evidence.name)),
+        decision=_normalized_decision(str(parsed.get("decision") or "candidate")),
+        confidence=_bounded_float(parsed.get("confidence"), default=0.5),
+        reason=str(parsed.get("reason") or ""),
+        page_number=evidence.page_number,
+        crop_path=str(evidence.crop_path),
+    )
+
+
+def _api_key_env(config: VisionReviewConfig) -> str:
+    if config.api_key_env:
+        return config.api_key_env
+    if config.provider == "dashscope":
+        return "DASHSCOPE_API_KEY"
+    return "OPENAI_API_KEY"
+
+
+def _provider_url(config: VisionReviewConfig) -> str:
+    if config.provider == "dashscope":
+        return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    return "https://api.openai.com/v1/chat/completions"
 
 
 def _vision_prompt(evidence: VisionEvidence) -> str:
@@ -250,7 +338,7 @@ def _image_data_url(path: Path) -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
-def _response_text(data: dict[str, Any]) -> str:
+def _openai_response_text(data: dict[str, Any]) -> str:
     if isinstance(data.get("output_text"), str):
         return data["output_text"]
     chunks: list[str] = []
@@ -259,6 +347,23 @@ def _response_text(data: dict[str, Any]) -> str:
             if content.get("type") in {"output_text", "text"}:
                 chunks.append(str(content.get("text", "")))
     return "\n".join(chunks).strip()
+
+
+def _chat_completion_text(data: dict[str, Any]) -> str:
+    choices = data.get("choices") or []
+    if not choices:
+        raise ValueError("chat completion 没有 choices")
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks = []
+        for item in content:
+            if isinstance(item, dict):
+                chunks.append(str(item.get("text", "")))
+        return "\n".join(chunks).strip()
+    raise ValueError("chat completion content 格式未知")
 
 
 def _parse_json_text(text: str) -> dict[str, Any]:
@@ -311,9 +416,9 @@ def _is_fatal_error(decision: VisionDecision) -> bool:
     return any(marker in reason for marker in fatal_markers)
 
 
-def _cache_key(evidence: VisionEvidence) -> str:
+def _cache_key(evidence: VisionEvidence, config: VisionReviewConfig) -> str:
     digest = hashlib.sha256(evidence.crop_path.read_bytes()).hexdigest()[:24]
-    return f"{evidence.normalized_name}|{digest}"
+    return f"{config.provider}|{config.model}|{evidence.normalized_name}|{digest}"
 
 
 def _load_cache(path: Path) -> dict[str, VisionDecision]:

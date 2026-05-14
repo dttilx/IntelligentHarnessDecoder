@@ -15,6 +15,7 @@
 - AI 文本清洗：先生成可交给 AI 审核的 `ai_review_prompt.md`，再由 AI 对候选名称进行 accepted/candidate/rejected 判断、名称归一化和理由说明。
 - AI 视觉审核：可选开启 `--ai-vision-review`，为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断候选是否真实、是否需要修正。
 - 速度优化：支持 `--reuse-ocr` 复用已有 OCR CSV，支持 `--vision-only` 只重跑视觉审核；视觉审核带进度、缓存、短超时，并在额度不足或鉴权失败时停止后续请求。
+- 国内模型接入：视觉审核支持阿里云百炼 DashScope OpenAI 兼容接口，可通过 `--ai-provider dashscope --ai-vision-model qwen3-vl-flash` 调用 Qwen3-VL-Flash。
 - 审核输出：生成 `final/gold_names.txt`、`final/recall_boost_names.txt`、`review/components_review.xlsx` 和 `review/ai_review_prompt.md`；开启视觉审核后额外生成 `final/ai_verified_names.txt`、`review/ai_vision_review.xlsx`、`ai_vision/vision_manifest.csv` 和 `ai_vision/crops/`。
 
 ## 非目标
