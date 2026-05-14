@@ -67,6 +67,53 @@ BAD_CONTEXT_KEYWORDS = (
     "盲堵",
     "出线端视",
     "焊接",
+    "表示不选择",
+    "默认",
+    "互相插接锁牢",
+    "当识别到",
+    "点亮",
+    "熄灭",
+    "状态指示",
+    "长度为",
+    "应符合",
+    "采用",
+    "式样图",
+    "重叠放置",
+    "零件号",
+    "底色",
+    "亮度",
+    "信号从",
+    "通过CAN",
+    "通讯实现",
+    "输出供电",
+    "控制端",
+    "用电缆线",
+    "电缆线长",
+    "后防护",
+    "贴标签",
+)
+CONFIG_KEYWORDS = (
+    "_无",
+    "_有",
+    "无VCU",
+    "有VCU",
+    "无AEBS",
+    "有AEBS",
+    "无AMT",
+    "有AMT",
+    "无ABS",
+    "有ABS",
+    "无电控风扇",
+    "有电控风扇",
+    "无胎压监测",
+    "有胎压监测",
+    "无电动油泵",
+    "有电动油泵",
+    "单腔油箱",
+    "双腔油箱",
+    "轴距",
+    "前标志",
+    "驾驶室_",
 )
 INCOMPLETE_NAMES = {
     "EBS-",
@@ -90,6 +137,7 @@ GENERIC_NAMES = {
 }
 CONNECTOR_ID_PATTERN = re.compile(r"^(?:J|X|CN|XS|XP)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 WIRE_ID_PATTERN = re.compile(r"^(?:A|B|S|M)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
+PURE_CONNECTOR_ID_PATTERN = re.compile(r"^(?:CN|X|J|F|G|K)[-_]?\d{1,4}[A-Z]?$", re.IGNORECASE)
 SHORT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,10}$")
 PART_NUMBER_FRAGMENT_PATTERN = re.compile(r"^[0-9]+(?:-[0-9]*)?$")
 OCR_REPLACEMENTS = (
@@ -105,6 +153,12 @@ OCR_REPLACEMENTS = (
     ("接左车门电线束", "左车门电线束"),
     ("接右车身电线束", "右车身电线束"),
     ("接右车门电线束", "右车门电线束"),
+    ("义表板电线束", "仪表板电线束"),
+    ("右地盘电线束", "右底盘电线束"),
+    ("DPE", "DPF"),
+    ("OPF", "DPF"),
+    ("ERS驱动桥模块", "EBS驱动桥模块"),
+    ("FBS驱动桥模块", "EBS驱动桥模块"),
 )
 
 
@@ -188,6 +242,7 @@ def _clean_component_phrase(text: str) -> str:
     value = PUNCTUATION_PATTERN.sub(" ", value)
     value = SPACE_PATTERN.sub(" ", value).strip()
     value = re.sub(r"^\d{1,4}[A-Za-z]?(?=[\u4e00-\u9fff])", "", value).strip()
+    value = re.sub(r"^[一二三四五六七八九十]?[路]?(?=底盘熔断器)", "", value).strip()
     value = _trim_part_number_tail(value)
 
     for anchor in ("车身控制器", "组合仪表", "OBD诊断插座"):
@@ -214,7 +269,20 @@ def _trim_part_number_tail(value: str) -> str:
 
 
 def _is_bad_context(text: str) -> bool:
-    return any(keyword in text for keyword in BAD_CONTEXT_KEYWORDS)
+    value = normalize_text(text)
+    return any(keyword in value for keyword in BAD_CONTEXT_KEYWORDS)
+
+
+def _is_config_text(text: str) -> bool:
+    value = normalize_text(text)
+    if "_" in value and any(keyword in value for keyword in CONFIG_KEYWORDS):
+        return True
+    return any(keyword in value for keyword in CONFIG_KEYWORDS) and not _looks_like_component_name(value)
+
+
+def _looks_like_component_name(text: str) -> bool:
+    value = normalize_text(text)
+    return any(keyword in value for keyword in COMPONENT_SUFFIXES)
 
 
 def _regex_candidates(text: str, config: ExtractorConfig) -> list[str]:
@@ -328,17 +396,23 @@ def _is_noise(name: str) -> bool:
 
 def _is_rejected_name(name: str) -> bool:
     value = normalize_name(name)
+    if _is_config_text(value):
+        return True
     if len(value) < 2:
         return True
     if value in INCOMPLETE_NAMES:
         return True
     if len(value) > 24:
         return True
+    if len(value) > 14 and any(keyword in value for keyword in ("长度", "防护", "标签", "供电", "信号")):
+        return True
     if re.fullmatch(r"\d+", value):
         return True
     if re.fullmatch(r"\d{4,8}", value):
         return True
     if re.fullmatch(r"\d{1,4}[A-Z]{1,3}", value):
+        return True
+    if "_" in value:
         return True
     if value in {"MM", "CM", "KG", "PAGE", "PDF"}:
         return True
@@ -357,6 +431,8 @@ def decide_candidate(item: ComponentCandidate, all_names: set[str] | None = None
     if _is_rejected_name(item.name):
         return "rejected"
     if item.decision == "candidate":
+        return "candidate"
+    if PURE_CONNECTOR_ID_PATTERN.fullmatch(item.name):
         return "candidate"
     if WIRE_ID_PATTERN.fullmatch(item.name):
         return "candidate"
