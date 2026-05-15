@@ -616,6 +616,7 @@ def _clean_final_names(
     names = _remove_composite_names(names)
     names = _remove_generic_subnames(names, ai_final_names)
     names = _remove_final_noise(names)
+    names = _normalize_final_name_dict(names, allow_loose=False)
     return sorted(names.values())
 
 
@@ -636,6 +637,8 @@ def _clean_balanced_final_names(
     )
     names = _remove_hard_final_noise(names)
     names = _restore_ai_names(names, ai_final_names)
+    names = _normalize_final_name_dict(names, allow_loose=False)
+    names = _remove_hard_final_noise(names)
     return sorted(names.values())
 
 
@@ -655,6 +658,8 @@ def _clean_broad_final_names(
     )
     names = _remove_hard_final_noise(names)
     names = _restore_ai_names(names, ai_final_names)
+    names = _normalize_final_name_dict(names, allow_loose=True)
+    names = _remove_hard_final_noise(names)
     return sorted(names.values())
 
 
@@ -755,6 +760,246 @@ def _has_connector_or_part_prefix(name: str) -> bool:
         re.search(r"\b(?:NOx|INOx|OBD|DPF|DOC|SCR|ABS|EBS|ESC|ECAS|ASR|PM|ECU|T-?BOX)\b", name, re.I)
         or re.search(r"\b(?:X|J|K|C|D)\d{1,4}[A-Z]?\b", name)
     )
+
+
+FINAL_NAME_REPAIRS = (
+    ("NOX", "NOx"),
+    ("INOX", "INOx"),
+    ("IOx传感器", "NOx传感器"),
+    ("INOx传感器", "NOx传感器"),
+    ("下NOx传感器", "NOx传感器 下游"),
+    ("元光继电器", "远光继电器"),
+    ("儿刮水继电器", "刮水继电器"),
+    ("川刮水继电器", "刮水继电器"),
+    ("刮冰电机", "刮水电机"),
+    ("刮脉电机", "刮水电机"),
+    ("古底盘电线束", "右底盘电线束"),
+    ("古前ABS传感器", "右前ABS传感器"),
+    ("同盘开关", "组合开关"),
+    ("科右组合开关", "右组合开关"),
+    ("身搭铁", "车身搭铁"),
+    ("车车身搭铁", "车身搭铁"),
+    ("室熔断器盒", "驾驶室熔断器盒"),
+    ("室熔断器", "驾驶室熔断器"),
+    ("室液压", "驾驶室液压"),
+    ("动机电线束", "发动机电线束"),
+    ("压传感器", "气压传感器"),
+    ("压翻转", "液压翻转"),
+    ("灯光旋", "灯光旋钮开关"),
+    ("线束端", "线束"),
+    ("开燕", "开关"),
+    ("优剩叭", "喇叭"),
+    ("发发动机", "发动机"),
+    ("继电器儿4", "继电器"),
+    ("继电器儿", "继电器"),
+    ("贴点烟器照明灯", "点烟器照明灯"),
+)
+
+TRAILING_EVIDENCE_PATTERN = re.compile(
+    r"\s+(?:"
+    r"[XCJKD]\d{1,4}[A-Z]?|"
+    r"EBS-X\d+|EBS|ABS|T-?BOX|DH1|DL1|"
+    r"PP\d{4,}|DWJ-[A-Z]\d+|"
+    r"\d+-\d+(?:-\d+)?"
+    r")$",
+    re.IGNORECASE,
+)
+
+LEADING_EVIDENCE_PATTERN = re.compile(
+    r"^(?:"
+    r"-?\d{1,8}[A-Z]?(?:-\d+[A-Z]?){0,2}-?|"
+    r"\d+[A-Z](?:-\d+[A-Z]?){1,3}|"
+    r"[A-Z]\d+[A-Z]\d+|"
+    r"[A-Z]{1,4}\d{1,4}[A-Z]?-?|"
+    r"[A-Z]{1,4}-[A-Z]?\d+|"
+    r"EBS-X\d+|T-?BOX|ABS|EBS"
+    r")\s+",
+    re.IGNORECASE,
+)
+
+FINAL_TEXT_NOISE_MARKERS = (
+    "摄像头",
+    "天线",
+    "传喇叭",
+    "TBOX传",
+    "TROX",
+    "各用",
+    "所示",
+    "本体",
+    "共40路",
+    "无日行灯",
+    "有日行灯",
+    "再生请求 禁止再生开关",
+    "继电器液压翻转电机",
+    "传感器NOx传感器",
+)
+
+FINAL_COMPONENT_SUFFIXES = (
+    "控制器",
+    "传感器",
+    "继电器",
+    "熔断器",
+    "保险丝",
+    "保险丝盒",
+    "插接器",
+    "插座",
+    "电线束",
+    "线束",
+    "电磁阀",
+    "电机",
+    "开关",
+    "仪表",
+    "模块",
+    "喇叭",
+    "雾灯",
+    "灯",
+    "泵",
+    "阀",
+    "搭铁",
+)
+
+FINAL_EXACT_NOISE = {
+    "传感器",
+    "控制器",
+    "插接器",
+    "电线束",
+    "线束",
+    "开关",
+    "电机",
+    "继电器",
+    "熔断器",
+    "保险丝",
+    "模块",
+    "仪表",
+    "灯",
+    "阀",
+    "泵",
+}
+
+
+def _normalize_final_name_dict(names: dict[str, str], allow_loose: bool) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    source_keys = set(names)
+    for _, original in names.items():
+        cleaned = _normalize_final_display_name(original, allow_loose=allow_loose)
+        if not cleaned:
+            continue
+        key = normalize_name(cleaned)
+        if not key or _is_final_display_noise(key, source_keys, allow_loose=allow_loose):
+            continue
+        previous = normalized.get(key)
+        if previous is None or _prefer_final_display_name(cleaned, previous):
+            normalized[key] = cleaned
+    return normalized
+
+
+def _normalize_final_display_name(name: str, allow_loose: bool) -> str:
+    value = normalize_name(name)
+    if not value:
+        return ""
+    for old, new in FINAL_NAME_REPAIRS:
+        value = value.replace(old, new)
+    value = re.sub(r"^[I]?\d+\.(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"^[JK]\d+(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"^PF(?=压差传感器)", "DPF", value)
+    value = re.sub(r"^(?:DJ)?[A-Z0-9]+(?:-[A-Z0-9]+){1,4}(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"^-路(?=底盘)", "", value)
+    value = _strip_leading_evidence(value)
+    value = _strip_trailing_evidence(value)
+    value = _strip_leading_evidence(value)
+    value = _collapse_directional_sensor_name(value)
+    if not allow_loose:
+        value = _drop_relation_tail(value)
+    return normalize_name(value)
+
+
+def _strip_leading_evidence(name: str) -> str:
+    value = name.strip()
+    while True:
+        match = LEADING_EVIDENCE_PATTERN.match(value)
+        if not match:
+            return value
+        candidate = value[match.end() :].strip()
+        if not candidate or not _has_final_component_shape(candidate):
+            return value
+        value = candidate
+
+
+def _strip_trailing_evidence(name: str) -> str:
+    value = name.strip()
+    while True:
+        match = TRAILING_EVIDENCE_PATTERN.search(value)
+        if not match:
+            return value
+        candidate = value[: match.start()].strip()
+        if not candidate or not _has_final_component_shape(candidate):
+            return value
+        value = candidate
+
+
+def _collapse_directional_sensor_name(name: str) -> str:
+    if name == "x传感器":
+        return "NOx传感器"
+    value = re.sub(r"(?:NOx传感器){2,}\s*", "NOx传感器 ", name, flags=re.I)
+    value = re.sub(r"NOx传感器\s*下(?:游)?下?(?:\s+[XC]\w*)?$", "NOx传感器 下游", value, flags=re.I)
+    value = re.sub(r"NOx传感器\s*上(?:游)?上?(?:\s+[XC]\w*)?$", "NOx传感器 上游", value, flags=re.I)
+    value = re.sub(r"NOx传感器\s*上(?:游)?(?:\s+X\d+[A-Z]?)?$", "NOx传感器 上游", value, flags=re.I)
+    value = re.sub(r"NOx传感器\s*下(?:游)?(?:\s+X\w*)?$", "NOx传感器 下游", value, flags=re.I)
+    value = re.sub(r"NOx传感器下游", "NOx传感器 下游", value, flags=re.I)
+    value = re.sub(r"NOx传感器上游", "NOx传感器 上游", value, flags=re.I)
+    return value
+
+
+def _drop_relation_tail(name: str) -> str:
+    if " " in name:
+        parts = [part.strip() for part in name.split() if part.strip()]
+        if len(parts) == 2 and all(_has_final_component_shape(part) for part in parts):
+            return parts[0]
+    for marker in (" 与", "与", " 对接", "对接"):
+        if marker in name and not name.endswith("对接插接器"):
+            head = name.split(marker, 1)[0].strip()
+            if _has_final_component_shape(head):
+                return head
+    return name
+
+
+def _has_final_component_shape(name: str) -> bool:
+    base = re.sub(r"[-_]?\d{1,3}$", "", name)
+    if _component_suffix(name) or _component_suffix(base):
+        return True
+    if any(name.endswith(suffix) or base.endswith(suffix) for suffix in FINAL_COMPONENT_SUFFIXES):
+        return True
+    return _has_connector_or_part_prefix(name)
+
+
+def _prefer_final_display_name(candidate: str, previous: str) -> bool:
+    if len(candidate) < len(previous):
+        return True
+    if any(token in previous for token in (" X", " C", " T-BOX", " EBS", " ABS")):
+        return True
+    return False
+
+
+def _is_final_display_noise(name: str, all_names: set[str], allow_loose: bool) -> bool:
+    if _is_hard_final_noise_name(name):
+        return True
+    if name in FINAL_EXACT_NOISE:
+        return True
+    if any(marker in name for marker in FINAL_TEXT_NOISE_MARKERS):
+        return True
+    if "请求" in name and "电线束" in name:
+        return True
+    if "禁止再生开关" in name and "电线束" in name:
+        return True
+    if name in {"控制器", "控制开关", "功能开关", "器开关", "插接器型号", "总成插接器", "成插接器", "束对接插接器"}:
+        return True
+    if not allow_loose and _is_relation_name_with_better_parts(name, all_names):
+        return True
+    if re.fullmatch(r"[\dA-Z.\- ]+", name):
+        return True
+    if len(name) < 3:
+        return True
+    return False
 
 
 def _remove_composite_names(names: dict[str, str]) -> dict[str, str]:
