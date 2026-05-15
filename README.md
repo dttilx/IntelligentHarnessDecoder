@@ -29,18 +29,60 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --dpi 300
 python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 ```
 
+启用 AI 视觉审核候选名称：
+
+```powershell
+$env:OPENAI_API_KEY="你的 API Key"
+python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300 --ai-vision-review
+```
+
+如果没有设置 `OPENAI_API_KEY`，程序不会调用外部 API，只会生成裁剪图和离线审核清单，方便人工查看。
+
+使用阿里云百炼 DashScope 的 Qwen3-VL-Flash：
+
+```powershell
+$env:DASHSCOPE_API_KEY="你的阿里百炼 API Key"
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-vision-review --ai-provider dashscope --ai-vision-model qwen3-vl-flash --ai-vision-max-names 10
+```
+
+已经跑过 OCR 后，复用缓存重新提取和审核：
+
+```powershell
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --reuse-ocr --no-marked-images
+```
+
+只复用已有候选结果执行视觉审核：
+
+```powershell
+python -m src.main "C:\path\to\wiring-diagram.pdf" --pages 4 --vision-only --ai-vision-review --ai-vision-max-names 10
+```
+
 ## 输出
 
-默认输出到 `output/`：
+默认输出到 `output/`，按用途分目录：
 
-- `output/pages/`：PDF 渲染出的页面图片
-- `output/tiles/`：切片图片
-- `output/ocr_raw/ocr_raw.csv`：OCR 原始识别文本
-- `output/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
-- `output/components.xlsx`：Excel 版结果，包含明细、去重名称和疑似候选名称
-- `output/components.txt`：高准确率的去重元器件名称列表
-- `output/components_candidates.txt`：疑似候选名称列表，用于人工补漏
-- `output/marked_pages/`：带识别框的校验图片
+- `output/final/gold_names.txt`：高准确率元器件名称列表
+- `output/final/recall_boost_names.txt`：高召回补漏名称列表
+- `output/final/components.txt`：规则层高可信名称列表
+- `output/final/components_candidates.txt`：规则层疑似候选名称列表
+- `output/final/rejected_names.txt`：打分后拒绝的名称，便于排查
+- `output/review/components_review.xlsx`：按证据打分后的审核表，包含分数、层级、来源、页码和判断理由
+- `output/review/draft_gold_names.xlsx`：Excel 版高可信名称和召回补漏名称
+- `output/review/ai_review_prompt.md`：可交给 AI 继续清洗候选名称的审核提示词
+- `output/review/ai_vision_review.xlsx`：AI 视觉审核结果，启用 `--ai-vision-review` 且设置 API key 后生成
+- `output/final/ai_verified_names.txt`：AI 视觉确认后的名称，启用 `--ai-vision-review` 且设置 API key 后生成
+- `output/final/final_answer_names.txt`：默认推荐答案，等同于平衡版，兼顾准确率和召回率
+- `output/final/final_answer_strict.txt`：严格版，优先准确率，适合直接提交前快速查看
+- `output/final/final_answer_balanced.txt`：平衡版，规则高可信结果、AI 审核通过结果和一部分高质量补召回结果的合并
+- `output/final/final_answer_broad.txt`：宽松版，保留更多可能正确的名称，适合人工继续捞漏
+- `output/review/final_answer_sources.xlsx`：最终答案来源表，标明来自规则还是 AI 审核
+- `output/ai_vision/vision_manifest.csv`：送审名称、裁剪图、页码和 OCR 原文清单
+- `output/ai_vision/crops/`：候选名称附近的原图裁剪，用于 AI 视觉审核或人工复核
+- `output/ai_vision/vision_review_cache.jsonl`：AI 视觉审核缓存，避免同一裁剪图重复调用 API
+- `output/raw/components.csv`：元器件候选明细，包含 `accepted`/`candidate` 分层标记
+- `output/raw/ocr_raw.csv`：OCR 原始识别文本
+- `output/raw/pdf_text.csv`：PDF 原生文本
+- `output/images/`：PDF 页面图、切片图和带识别框的校验图
 
 ## 准确率和召回率优化
 
@@ -54,6 +96,11 @@ python -m src.main "C:\path\to\wiring-diagram.pdf" --dpi 300
 - 对线号、页码、纯数字、过长文本和低置信度文本进行过滤，并按页面、名称和位置做去重，减少重复框和噪声项。
 - 输出分为高可信结果和疑似候选结果：`components.txt` 保持干净，`components_candidates.txt` 保留可能需要人工补漏的编号和短名称。
 - 对相邻 OCR 的短编号和元器件名称做近邻合并，合并结果只进入疑似候选层，用来补回被 OCR 拆开的名称和标识。
+- 额外提取 PDF 原生文本证据，并对候选进行打分，生成 `components_review.xlsx` 和 `draft_gold_names.txt`，用于快速形成 AI 初版标准答案。
+- 可选启用 AI 视觉审核：程序会为高可信和召回补漏名称裁剪原图局部区域，让视觉模型结合图片上下文判断接受、修正或拒绝候选，输出 `ai_verified_names.txt`。
+- 调试时可以使用 `--reuse-ocr` 复用 `output/raw/ocr_raw.csv`，跳过 PDF 渲染、切片和 PaddleOCR；也可以用 `--vision-only` 只重跑视觉审核。
+- AI 视觉审核默认最多送审 30 个候选，支持 `--ai-vision-max-names` 调整；每次请求默认 30 秒超时，支持 `--ai-vision-timeout` 调整。遇到额度不足或鉴权错误会停止后续请求。
+- 视觉审核支持 `--ai-provider openai` 和 `--ai-provider dashscope`。DashScope 使用 `DASHSCOPE_API_KEY`，适合调用阿里云百炼的 `qwen3-vl-flash` 等视觉理解模型。
 
 这版更适合作为自动提取后的初筛结果：相比只用关键词截取，候选名称会更干净；相比只保留高置信度 OCR，又能保留更多真实元器件名称。若要继续提高准确率，建议基于 `components.xlsx` 建立一份人工标注标准答案，再按准确率、召回率、F1 分数迭代规则。
 
