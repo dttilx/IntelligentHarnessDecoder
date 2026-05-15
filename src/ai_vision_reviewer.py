@@ -564,6 +564,8 @@ def _write_final_answer(
             }
         )
 
+    # Keep three review layers instead of forcing one precision/recall trade-off.
+    # The default answer uses the balanced layer; strict and broad are audit aids.
     strict_names = _clean_final_names(merged, suppressed, ai_final_names)
     balanced_names = _clean_balanced_final_names(merged, suppressed, ai_final_names, final_dir)
     broad_names = _clean_broad_final_names(merged, suppressed, ai_final_names, final_dir)
@@ -626,6 +628,8 @@ def _clean_balanced_final_names(
     ai_final_names: list[str],
     final_dir: Path,
 ) -> list[str]:
+    # Balanced output keeps high-confidence rule/AI names, then admits filtered
+    # recall candidates. This is the file intended for normal submission.
     names = {key: value for key, value in merged.items() if key not in suppressed}
     names = _remove_composite_names(names)
     names = _remove_hard_final_noise(names)
@@ -648,6 +652,8 @@ def _clean_broad_final_names(
     ai_final_names: list[str],
     final_dir: Path,
 ) -> list[str]:
+    # Broad output is intentionally recall-heavy. It is useful as a review pool,
+    # not as the clean final answer.
     names = {key: value for key, value in merged.items() if key not in suppressed}
     names = _remove_hard_final_noise(names)
     names = _add_recall_boost_names(
@@ -677,6 +683,8 @@ def _add_recall_boost_names(
     limit: int,
     allow_loose: bool,
 ) -> dict[str, str]:
+    # Recall candidates come from weak evidence. Add them only when their shape
+    # still looks like a component name, and cap the count to avoid flooding.
     added = 0
     for name in recall_names:
         normalized = normalize_name(name)
@@ -878,6 +886,8 @@ FINAL_EXACT_NOISE = {
 
 
 def _normalize_final_name_dict(names: dict[str, str], allow_loose: bool) -> dict[str, str]:
+    # Normalize after merging so duplicate variants collapse into one final name.
+    # Part numbers and connector ids are treated as evidence, not answer text.
     normalized: dict[str, str] = {}
     source_keys = set(names)
     for _, original in names.items():
@@ -894,6 +904,8 @@ def _normalize_final_name_dict(names: dict[str, str], allow_loose: bool) -> dict
 
 
 def _normalize_final_display_name(name: str, allow_loose: bool) -> str:
+    # Final display names should be human-submittable component names. Strip
+    # leading/trailing evidence ids and repair common OCR fragments here.
     value = normalize_name(name)
     if not value:
         return ""
